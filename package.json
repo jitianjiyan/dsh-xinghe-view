@@ -1,0 +1,56 @@
+{
+  "name": "dsh-xinghe-view",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Galaxy View — browse DSH workspaces as star systems and sessions as orbiting planets, with searchable pinyin and linked-session sharing.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "galaxy",
+    "workspace",
+    "session"
+  ],
+  "license": "MIT",
+  "author": "jitianjiyan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jitianjiyan/dsh-xinghe-view.git"
+  },
+  "homepage": "https://github.com/jitianjiyan/dsh-xinghe-view#readme",
+  "bugs": {
+    "url": "https://github.com/jitianjiyan/dsh-xinghe-view/issues"
+  },
+  "engines": {
+    "dsh": ">=0.2.2-rc.1"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./assets/*": "./assets/*"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "assets/*.png",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
