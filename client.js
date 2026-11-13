@@ -345,7 +345,7 @@ const rnd01 = (i) => {
         g.z = globeR * sr * Math.sin(theta);
       });
 
-      /* 球壳网格：6 条纬线 + 6 条经线，每帧投影成 path。
+      /* 球壳网格：6 条纬线 + 12 条经线半圈（合起来是 6 条完整大圆），每帧投影成 path。
          每条线拆成远/近两条：背面的线淡、正面的线亮，球体前后才分得开。 */
       const rings = [];
       for (const lat of [-66, -40, -14, 14, 40, 66]) {
@@ -359,7 +359,7 @@ const rnd01 = (i) => {
         }
         rings.push(pts);
       }
-      for (let k = 0; k < 6; k += 1) {
+      for (let k = 0; k < 12; k += 1) {
         const lo = (k * 30 * Math.PI) / 180;
         const pts = [];
         for (let i = 0; i < 60; i += 1) {
