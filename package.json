@@ -1,6 +1,6 @@
 {
   "name": "dsh-xinghe-view",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "Galaxy View — browse DSH workspaces as star systems and sessions as orbiting planets, with searchable pinyin and linked-session sharing.",
   "keywords": [
