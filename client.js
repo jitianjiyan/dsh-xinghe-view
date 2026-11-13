@@ -388,6 +388,9 @@ const rnd01 = (i) => {
           z: globeR * sr2 * Math.sin(theta),
         });
       }
+      /* 南北极：12 条经线都从这里出发，不点个记号，线看着就像散的。 */
+      dots.push({ x: 0, y: globeR, z: 0, big: true });
+      dots.push({ x: 0, y: -globeR, z: 0, big: true });
       const globe = { R: globeR, rings, dots };
 
       const byId = new Map();
@@ -1103,7 +1106,7 @@ const rnd01 = (i) => {
               for (let i = 0; i < globe.dots.length; i += 1) {
                 const q = globe.dots[i];
                 const pp = projectMat(qm, q.x, q.y, q.z, cv, cv.k, b0.w, b0.h);
-                const rr = (0.85 + pp.s * 0.55).toFixed(2);
+                const rr = (q.big ? 3.4 * pp.s : 0.85 + pp.s * 0.55).toFixed(2);
                 const stamp =
                   'M' + (pp.x - rr).toFixed(1) + ' ' + pp.y.toFixed(1) +
                   'a' + rr + ' ' + rr + ' 0 1 0 ' + (2 * rr).toFixed(2) + ' 0' +
