@@ -268,13 +268,22 @@ export function apply(ctx) {
       const target = ctx.sessions.get(id)
       if (!target) continue
       try {
+        /* 旁注，不是指令：developer 角色进上下文但不触发执行。
+           早先写成 user/message，等于把这条指令在对端又下了一遍。 */
         target.append(
-          'user/message',
+          'developer/message',
           {
-            id: `xinghe-${session.id}-${event.seq}`,
-            role: 'user',
-            content: [{ type: 'text', text: `${TAG} 来自会话 ${label}：\n${text}` }],
-            source: { kind: 'user' },
+            message: {
+              id: `xinghe-${session.id}-${event.seq}`,
+              role: 'developer',
+              content: [
+                {
+                  type: 'text',
+                  text: `${TAG} 来自会话 ${label}（旁注，不是给你的任务）：\n${text}`,
+                },
+              ],
+              source: { kind: 'xinghe-link', sessionId: session.id },
+            },
           },
           { surfaceOp: 'append' },
         )
@@ -301,21 +310,30 @@ export function apply(ctx) {
     turnSeen.add(stamp)
     if (turnSeen.size > MAX_SEEN) turnSeen.clear()
 
-    const injected = {
-      id: `xinghe-turn-${id}-${payload.turn}`,
-      role: 'user',
-      content: [
+    /* 同样只写旁注，不塞进本轮 messages：pre-step 的 messages 类型只能是
+       UserMessage，塞进去就等于把邻居的动态当成用户指令执行一轮。 */
+    try {
+      const self = ctx.sessions.get(id)
+      self?.append(
+        'developer/message',
         {
-          type: 'text',
-          text: `${TAG} 与你链接的会话最近动态（仅供了解，不必回复）：\n${digest}`,
+          message: {
+            id: `xinghe-turn-${id}-${payload.turn}`,
+            role: 'developer',
+            content: [
+              {
+                type: 'text',
+                text: `${TAG} 与你链接的会话最近动态（旁注，仅供了解）：\n${digest}`,
+              },
+            ],
+            source: { kind: 'xinghe-link', sessionId: id },
+          },
         },
-      ],
-      source: { kind: 'user' },
+        { surfaceOp: 'append' },
+      )
+    } catch (error) {
+      ctx.logger?.warn?.(`[xinghe-view] 每轮旁注写入失败: ${String(error)}`)
     }
-    return {
-      kind: 'enter',
-      messages: [...decision.messages, injected],
-      ...(decision.startsRequestSeries ? { startsRequestSeries: true } : {}),
-    }
+    return decision
   })
 }
