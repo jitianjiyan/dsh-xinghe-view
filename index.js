@@ -11,7 +11,6 @@ import { dirname, join } from 'node:path'
 
 const STORE = join(homedir(), '.dsh', 'xinghe-view', 'links.json')
 const TAG = '⟦星河互读⟧'
-const MAX_SEEN = 4096
 
 let state = loadState()
 
@@ -99,27 +98,10 @@ function safeMessages(session) {
   }
 }
 
-/** 把若干邻居会话的最近消息收成一段纯文本，供 prompt 注入或工具返回。 */
-function digestFor(ctx, neighbors, limit) {
-  const blocks = []
-  for (const id of neighbors) {
-    const session = ctx.sessions.get(id)
-    if (!session) continue
-    const lines = safeMessages(session)
-      .slice(-limit)
-      .map((m) => textOf(m))
-      .filter(Boolean)
-      .map((t) => `- ${truncate(t, 280)}`)
-    if (lines.length) blocks.push(`会话 ${id}：\n${lines.join('\n')}`)
-  }
-  return blocks.join('\n\n')
-}
-
 export const name = 'dsh-xinghe-view'
 export const inject = ['sessions', 'webServer', 'tools']
 
 export function apply(ctx) {
-  const turnSeen = new Set()
 
   /* 只读工具：让模型自己按需翻阅链接会话，而不是把全部内容塞进上下文。 */
   ctx.effect(() =>
@@ -333,52 +315,11 @@ export function apply(ctx) {
      必须带 turn/step，实时事件里拿不到，校验直接让该轮失败。
      现在只保留下面按轮注入：谁都不写别人的日志。 */
 
-  /* 每轮开始时把邻居最近的动态写成自己的一条旁注（只写自己，不碰对方日志）。 */
-  ctx.on('agent/pre-step', async (payload, next) => {
-    const decision = await next()
-    if (!decision || decision.kind !== 'enter') return decision
-    if (state.settings.mode === 'off') return decision
-    const id = payload && payload.agent && payload.agent.id
-    if (!id) return decision
-    const neighbors = neighborsOf(id)
-    if (!neighbors.length) return decision
-
-    const stamp = `${id}:${payload.turn}`
-    if (turnSeen.has(stamp)) return decision
-    const digest = digestFor(ctx, neighbors, 6)
-    if (!digest) return decision
-    turnSeen.add(stamp)
-    if (turnSeen.size > MAX_SEEN) turnSeen.clear()
-
-    /* 同样只写旁注，不塞进本轮 messages：pre-step 的 messages 类型只能是
-       UserMessage，塞进去就等于把邻居的动态当成用户指令执行一轮。 */
-    /* 宿主校验：turn/step 必须是 non-negative safe integer，缺一个就让整轮失败。 */
-    const turn = Number.isSafeInteger(payload.turn) ? payload.turn : 0
-    const step = Number.isSafeInteger(payload.step) ? payload.step : 0
-    try {
-      const self = ctx.sessions.get(id)
-      self?.append(
-        'developer/message',
-        {
-          turn,
-          step,
-          message: {
-            id: `xinghe-turn-${id}-${turn}`,
-            role: 'developer',
-            content: [
-              {
-                type: 'text',
-                text: `${TAG} 与你链接的会话最近动态（旁注，仅供了解）：\n${digest}`,
-              },
-            ],
-            source: { kind: 'xinghe-link', sessionId: id },
-          },
-        },
-        { surfaceOp: 'append' },
-      )
-    } catch (error) {
-      ctx.logger?.warn?.(`[xinghe-view] 每轮旁注写入失败: ${String(error)}`)
-    }
-    return decision
-  })
+  /* 这里曾经在 agent/pre-step 里 append('developer/message')，把邻居动态写成
+     自己的一条旁注。但 pre-step 发生的时刻 step 还没 start，事件会落在
+     step/end 与下一个 step/start 之间；宿主要求 developer/message 的 turn/step
+     必须与当前打开的轮次完全一致（dsh-session-format-v3-to-v4/lib/index.js:574），
+     于是整份日志被判 corrupt：
+       stored log is corrupt: developer/message does not match an open turn and step
+     现在不再写任何会话事件，互读只走 xinghe_read 工具（按需读取，零副作用）。 */
 }
