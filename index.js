@@ -124,6 +124,9 @@ export function apply(ctx) {
       async execute(args, exec) {
         const self = exec && exec.agent && exec.agent.id
         if (!self) return { text: '无法确定当前会话，读不到链接内容。' }
+        if (state.settings && state.settings.mode === 'off') {
+          return { text: '会话互通当前是「仅连线」模式。需要读链接会话的内容时，请在星河视图顶栏把模式切到「会话互通」。' }
+        }
         const neighbors = neighborsOf(self)
         if (!neighbors.length) return { text: '当前会话还没有链接任何其他会话。' }
         const limit = Math.max(1, Math.min(40, Number(args && args.limit) || 8))
@@ -227,85 +230,6 @@ export function apply(ctx) {
         }
         saveState()
         return send(200, { ok: true, count: pairs.length })
-      },
-    }),
-  )
-
-  /* 临时自检端点：对指定会话跑一次 deriveMessages，用来定位「本轮运行失败」
-     到底是日志里的坏事件、还是插件写入路径的问题。问题确认后可以删掉。 */
-  ctx.effect(() =>
-    ctx.webServer.register({
-      kind: 'exact',
-      path: '/xinghe/selftest',
-      handler: async (req, res) => {
-        const url = new URL(req.url || '/', 'http://127.0.0.1')
-        const id = url.searchParams.get('id') || ''
-        const out = { id, loaded: false, sessions: [] }
-        try {
-          out.sessions = ctx.sessions.list().map((s) => s.id).slice(0, 40)
-        } catch (error) {
-          out.listError = String(error)
-        }
-        const session = id ? ctx.sessions.get(id) : undefined
-        if (session) {
-          out.loaded = true
-          try {
-            const messages = session.deriveMessages()
-            out.messages = messages.length
-            out.lastRoles = messages.slice(-6).map((m) => m.role)
-          } catch (error) {
-            out.deriveError = String((error && error.message) || error)
-          }
-          /* ?flush=1：把内存里的事件落盘，配合离线修日志使用。 */
-          if (url.searchParams.get('flush') === '1') {
-            try {
-              const svc = ctx.sessions
-              if (svc && typeof svc.flush === 'function') {
-                await svc.flush(session)
-                out.flushed = true
-              } else if (typeof session.flush === 'function') {
-                await session.flush()
-                out.flushed = true
-              } else {
-                out.flushed = false
-                out.flushNote = 'no flush api'
-              }
-            } catch (error) {
-              out.flushError = String((error && error.message) || error)
-            }
-          }
-          /* ?scan=1：内存里全量扫一遍，列出缺 turn 的 developer/message。 */
-          if (url.searchParams.get('scan') === '1') {
-            try {
-              const events = typeof session.ownEvents === 'function' ? session.ownEvents() : []
-              const devs = events.filter((e) => e.type === 'developer/message')
-              out.devCount = devs.length
-              out.badDev = devs
-                .filter((e) => !Number.isSafeInteger(e.data && e.data.turn))
-                .map((e) => e.seq)
-                .slice(0, 30)
-              out.maxTurn = events.reduce((m, e) => (Number.isSafeInteger(e.data && e.data.turn) ? Math.max(m, e.data.turn) : m), 0)
-            } catch (error) {
-              out.scanError = String((error && error.message) || error)
-            }
-          }
-          /* ?tail=1：看最近事件的 type/seq/turn，判断是否有断裂或未收尾的轮次。 */
-          if (url.searchParams.get('tail') === '1') {
-            try {
-              const events = typeof session.ownEvents === 'function' ? session.ownEvents() : []
-              out.total = events.length
-              out.tail = events.slice(-10).map((e) => ({
-                t: e.type,
-                seq: e.seq,
-                turn: e.data && typeof e.data.turn === 'number' ? e.data.turn : null,
-              }))
-            } catch (error) {
-              out.tailError = String((error && error.message) || error)
-            }
-          }
-        }
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-        res.end(JSON.stringify(out))
       },
     }),
   )
