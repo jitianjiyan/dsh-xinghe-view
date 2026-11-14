@@ -2,8 +2,8 @@
  * 星河视图 · 宿主侧
  *
  * 浏览器里的行星连线只存在 localStorage，模型看不到。这里把链接表同步到宿主，
- * 并在某条链接会话收到用户消息时，把内容追加到它的邻居会话日志里 —— 邻居下次
- * 组装上下文时就能读到另一边的对话。
+ * 并在会话每一轮开始时，把它自己链接的邻居会话的最近动态写成一条旁注，
+ * 追加到**它自己**的日志里 —— 谁都不写别人的日志，也就不会替别人下指令。
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -119,7 +119,6 @@ export const name = 'dsh-xinghe-view'
 export const inject = ['sessions', 'webServer', 'tools']
 
 export function apply(ctx) {
-  const seen = new Set()
   const turnSeen = new Set()
 
   /* 只读工具：让模型自己按需翻阅链接会话，而不是把全部内容塞进上下文。 */
@@ -192,7 +191,16 @@ export function apply(ctx) {
         }
 
         const chunks = []
-        for await (const chunk of req) chunks.push(chunk)
+        let size = 0
+        for await (const chunk of req) {
+          size += chunk.length
+          if (size > 1 << 20) {
+            /* 链接表最多几百条，超过 1MB 一定是异常输入。 */
+            res.writeHead(413)
+            return res.end()
+          }
+          chunks.push(chunk)
+        }
         let body = null
         try {
           body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
@@ -241,63 +249,95 @@ export function apply(ctx) {
     }),
   )
 
-  ctx.on('session/event', (session, event) => {
-    if (!event || event.type !== 'user/message') return
-    if (state.settings.mode === 'turn') return
-    if (state.settings.broadcast === false) return
-    const source = event.data && event.data.source
-    if (!source || source.kind !== 'user') return
+  /* 临时自检端点：对指定会话跑一次 deriveMessages，用来定位「本轮运行失败」
+     到底是日志里的坏事件、还是插件写入路径的问题。问题确认后可以删掉。 */
+  ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
+      path: '/xinghe/selftest',
+      handler: async (req, res) => {
+        const url = new URL(req.url || '/', 'http://127.0.0.1')
+        const id = url.searchParams.get('id') || ''
+        const out = { id, loaded: false, sessions: [] }
+        try {
+          out.sessions = ctx.sessions.list().map((s) => s.id).slice(0, 40)
+        } catch (error) {
+          out.listError = String(error)
+        }
+        const session = id ? ctx.sessions.get(id) : undefined
+        if (session) {
+          out.loaded = true
+          try {
+            const messages = session.deriveMessages()
+            out.messages = messages.length
+            out.lastRoles = messages.slice(-6).map((m) => m.role)
+          } catch (error) {
+            out.deriveError = String((error && error.message) || error)
+          }
+          /* ?flush=1：把内存里的事件落盘，配合离线修日志使用。 */
+          if (url.searchParams.get('flush') === '1') {
+            try {
+              const svc = ctx.sessions
+              if (svc && typeof svc.flush === 'function') {
+                await svc.flush(session)
+                out.flushed = true
+              } else if (typeof session.flush === 'function') {
+                await session.flush()
+                out.flushed = true
+              } else {
+                out.flushed = false
+                out.flushNote = 'no flush api'
+              }
+            } catch (error) {
+              out.flushError = String((error && error.message) || error)
+            }
+          }
+          /* ?scan=1：内存里全量扫一遍，列出缺 turn 的 developer/message。 */
+          if (url.searchParams.get('scan') === '1') {
+            try {
+              const events = typeof session.ownEvents === 'function' ? session.ownEvents() : []
+              const devs = events.filter((e) => e.type === 'developer/message')
+              out.devCount = devs.length
+              out.badDev = devs
+                .filter((e) => !Number.isSafeInteger(e.data && e.data.turn))
+                .map((e) => e.seq)
+                .slice(0, 30)
+              out.maxTurn = events.reduce((m, e) => (Number.isSafeInteger(e.data && e.data.turn) ? Math.max(m, e.data.turn) : m), 0)
+            } catch (error) {
+              out.scanError = String((error && error.message) || error)
+            }
+          }
+          /* ?tail=1：看最近事件的 type/seq/turn，判断是否有断裂或未收尾的轮次。 */
+          if (url.searchParams.get('tail') === '1') {
+            try {
+              const events = typeof session.ownEvents === 'function' ? session.ownEvents() : []
+              out.total = events.length
+              out.tail = events.slice(-10).map((e) => ({
+                t: e.type,
+                seq: e.seq,
+                turn: e.data && typeof e.data.turn === 'number' ? e.data.turn : null,
+              }))
+            } catch (error) {
+              out.tailError = String((error && error.message) || error)
+            }
+          }
+        }
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify(out))
+      },
+    }),
+  )
 
-    const text = textOf(event.data)
-    if (!text || text.startsWith(TAG)) return
+  /* 这里曾经有 session/event 实时转发：把 A 的消息写进 B 的日志。
+     两个问题都致命——写对方日志等于替对方下了一条指令，而且 developer/message
+     必须带 turn/step，实时事件里拿不到，校验直接让该轮失败。
+     现在只保留下面按轮注入：谁都不写别人的日志。 */
 
-    const key = `${session.id}:${event.seq}`
-    if (seen.has(key)) return
-    seen.add(key)
-    if (seen.size > MAX_SEEN) {
-      // 直接 clear 会让刚被丢掉的事件在下一轮重复转发一次；逐出最早的一条即可。
-      const oldest = seen.values().next().value
-      if (oldest !== undefined) seen.delete(oldest)
-    }
-
-    const targets = neighborsOf(session.id)
-    if (!targets.length) return
-
-    const label = session.id
-    for (const id of targets) {
-      const target = ctx.sessions.get(id)
-      if (!target) continue
-      try {
-        /* 旁注，不是指令：developer 角色进上下文但不触发执行。
-           早先写成 user/message，等于把这条指令在对端又下了一遍。 */
-        target.append(
-          'developer/message',
-          {
-            message: {
-              id: `xinghe-${session.id}-${event.seq}`,
-              role: 'developer',
-              content: [
-                {
-                  type: 'text',
-                  text: `${TAG} 来自会话 ${label}（旁注，不是给你的任务）：\n${text}`,
-                },
-              ],
-              source: { kind: 'xinghe-link', sessionId: session.id },
-            },
-          },
-          { surfaceOp: 'append' },
-        )
-      } catch (error) {
-        ctx.logger?.warn?.(`[xinghe-view] 转发到 ${id} 失败: ${String(error)}`)
-      }
-    }
-  })
-
-  /* 「每轮刷新」模式：不改对方日志，只在每轮开始时把邻居最近的动态注入一次。 */
+  /* 每轮开始时把邻居最近的动态写成自己的一条旁注（只写自己，不碰对方日志）。 */
   ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next()
     if (!decision || decision.kind !== 'enter') return decision
-    if (state.settings.mode !== 'turn') return decision
+    if (state.settings.mode === 'off') return decision
     const id = payload && payload.agent && payload.agent.id
     if (!id) return decision
     const neighbors = neighborsOf(id)
@@ -312,13 +352,18 @@ export function apply(ctx) {
 
     /* 同样只写旁注，不塞进本轮 messages：pre-step 的 messages 类型只能是
        UserMessage，塞进去就等于把邻居的动态当成用户指令执行一轮。 */
+    /* 宿主校验：turn/step 必须是 non-negative safe integer，缺一个就让整轮失败。 */
+    const turn = Number.isSafeInteger(payload.turn) ? payload.turn : 0
+    const step = Number.isSafeInteger(payload.step) ? payload.step : 0
     try {
       const self = ctx.sessions.get(id)
       self?.append(
         'developer/message',
         {
+          turn,
+          step,
           message: {
-            id: `xinghe-turn-${id}-${payload.turn}`,
+            id: `xinghe-turn-${id}-${turn}`,
             role: 'developer',
             content: [
               {

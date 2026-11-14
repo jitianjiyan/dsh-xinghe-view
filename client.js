@@ -534,7 +534,9 @@ const rnd01 = (i) => {
        面板要让开它的高度。优先量真实元素，量不到才退回按指纹估高。 */
     const measureTopInset = () => {
       try {
-        const nodes = document.querySelectorAll('[data-tauri-drag-region], .titlebar, .app-titlebar, header[role="banner"]');
+        /* 只认桌面壳自己的标题栏标记；header[role="banner"] 在 Web 版可能是页面
+           自己的 banner，误量到会白让出一大截高度。 */
+        const nodes = document.querySelectorAll('[data-tauri-drag-region], .titlebar, .app-titlebar');
         let best = 0;
         for (const node of nodes) {
           const r = node.getBoundingClientRect();
@@ -785,13 +787,14 @@ const rnd01 = (i) => {
           return [];
         }
       });
-      /* 链接会话的互通方式：realtime=消息实时广播，turn=每轮注入最近动态，off=只看不读。 */
+      /* 链接会话的互通方式：turn=每轮开始时把邻居的动态注入成旁注，off=只看不读。
+         旧的 realtime（写对方会话日志）已废弃——那等于替对方下了一条指令。 */
       const [mode, setMode] = useState(() => {
         try {
           const saved = window.localStorage.getItem(MODE_KEY);
-          return saved === 'turn' || saved === 'off' ? saved : 'realtime';
+          return saved === 'off' ? 'off' : 'turn';
         } catch (e) {
-          return 'realtime';
+          return 'turn';
         }
       });
 
@@ -1379,7 +1382,7 @@ const rnd01 = (i) => {
                 saved = null;
               }
               const remoteMode = data.settings && data.settings.mode;
-              if (!saved && (remoteMode === 'realtime' || remoteMode === 'turn' || remoteMode === 'off')) {
+              if (!saved && (remoteMode === 'turn' || remoteMode === 'off')) {
                 setMode(remoteMode);
               }
             })
@@ -2015,7 +2018,6 @@ const rnd01 = (i) => {
               onClick: (e) => e.stopPropagation(),
               onChange: (e) => { e.stopPropagation(); changeMode(e.target.value); },
             }, [
-              h('option', { key: 'r', value: 'realtime' }, t('mode.realtime')),
               h('option', { key: 't', value: 'turn' }, t('mode.turn')),
               h('option', { key: 'o', value: 'off' }, t('mode.off')),
             ]),
